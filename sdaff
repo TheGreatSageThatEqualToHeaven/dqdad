@@ -1,0 +1,290 @@
+-- External script
+-- This script assumes that the configuration is available via getgenv().config
+
+local config = getgenv().config
+
+-- Use the configuration settings
+local autoDodgeEnabled = config.autoDodgeEnabled
+local detectDistance = config.detectDistance
+local dodgeCooldown = config.dodgeCooldown
+local dodgeOnceOnDoublePunch = config.dodgeOnceOnDoublePunch
+local reactionTimes = config.reactionTimes
+local currentDirection = config.currentDirection
+
+-- Load necessary modules
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local TeleportService = game:GetService("TeleportService")
+
+-- Variables
+local player = Players.LocalPlayer
+local playerName = player.Name
+local playerStates = Workspace.States[playerName]
+
+-- State variables
+local isStunned = false
+local recentAttacks = {}
+local lastDodgeTime = 0
+
+-- Function to find the nearest player
+local function getNearestPlayer()
+    local nearestPlayer = nil
+    local shortestDistance = math.huge
+    local localPlayerPosition = player.Character and player.Character:FindFirstChild("HumanoidRootPart").Position or Vector3.new(0,0,0)
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+            local distance = (p.Character.HumanoidRootPart.Position - localPlayerPosition).Magnitude
+            if distance < shortestDistance then
+                shortestDistance = distance
+                nearestPlayer = p
+            end
+        end
+    end
+
+    return nearestPlayer
+end
+
+-- Function to fire remote event
+local function fireRemoteEvent(direction)
+    local nearestPlayer = getNearestPlayer()
+    local nearestPlayerName = nearestPlayer and nearestPlayer.Name or "Unknown"
+
+    local directionVector
+    if direction == "Left" then
+        directionVector = Vector3.new(-0.08688679337501526, 0, 0.9962181448936462)
+    elseif direction == "Right" then
+        directionVector = Vector3.new(0.08688679337501526, 0, -0.9962181448936462)
+    elseif direction == "Forward" then
+        directionVector = Vector3.new(0.9962181448936462, 0, 0.08688679337501526)
+    elseif direction == "Backward" then
+        directionVector = Vector3.new(-0.9962181448936462, 0, -0.08688679337501526)
+    end
+
+    if not nearestPlayer then
+        print("No nearest player found.")
+        return
+    end
+
+    local A_1 = {
+        [1] = {
+            [1] = {
+                [1] = directionVector,
+                [2] = direction,
+                [3] = 0.06386971473693848
+            },
+            [2] = Workspace.Live[nearestPlayerName],
+            [3] = true,
+            [4] = true
+        },
+        [2] = "["
+    }
+    local Event = ReplicatedStorage:FindFirstChild("BridgeNet2") and ReplicatedStorage.BridgeNet2:FindFirstChild("dataRemoteEvent")
+    if Event then
+        Event:FireServer(A_1)
+    else
+        print("Event not found.")
+    end
+end
+
+-- Function to stop auto dodge
+local function stopAutoDodge()
+    print("Auto Dodge Stopped")
+    if shared.BaseEffectFunction then
+        local Effect = require(ReplicatedStorage:FindFirstChild("Modules"):FindFirstChild("EffectHelper"))
+        for i, v in pairs(shared.BaseEffectFunction) do
+            Effect[i] = v
+        end
+    end
+end
+
+-- Function to execute auto dodge
+local function autoDodgeScript()
+    if autoDodgeEnabled and not isStunned then
+        print("Auto Dodge Started")
+
+        local Effect = require(ReplicatedStorage:FindFirstChild("Modules"):FindFirstChild("EffectHelper"))
+        local isFHeld = false
+
+        local function getRoot(chr)
+            return chr:FindFirstChild("HumanoidRootPart")
+        end
+
+        local function isLocalPlayer(player)
+            return player == Players.LocalPlayer
+        end
+
+        local function handlePunch(attackerRoot, clientRoot, dodgeDistance, reactionTime)
+            local currentTime = tick()
+            if dodgeOnceOnDoublePunch and (currentTime - lastDodgeTime) < 0.5 then
+                return
+            end
+
+            if not recentAttacks[attackerRoot] or (currentTime - recentAttacks[attackerRoot]) > 0.2 then
+                recentAttacks[attackerRoot] = currentTime
+                lastDodgeTime = currentTime
+
+                local dodgeDirection = (clientRoot.Position - attackerRoot.Position).unit * dodgeDistance
+                
+                task.spawn(function()
+                    local stamina = Workspace.States[playerName].CharacterData.Stamina.Value
+                    if stamina > 0.1 then
+                        local occupied = Workspace.States[playerName].Occupied
+                        occupied.CanPunch.Value = false
+
+                        wait(reactionTime)
+                        
+                        clientRoot.CFrame = clientRoot.CFrame + dodgeDirection
+                        
+                        occupied.CanPunch.Value = true
+
+                        fireRemoteEvent(currentDirection)
+                    end
+                end)
+            end
+        end
+
+        shared.BaseEffectFunction = shared.BaseEffectFunction or {}
+        for i, v in pairs(Effect) do
+            shared.BaseEffectFunction[i] = shared.BaseEffectFunction[i] or v
+            Effect[i] = function(d, ...)
+                if not isFHeld and autoDodgeEnabled and not isStunned then
+                    task.spawn(function()
+                        if type(d) == "table" and typeof(d[2]) == "Instance" then
+                            local attacker = d[2]
+                            
+                            if not isLocalPlayer(attacker) then
+                                local attackerRoot = getRoot(attacker)
+                                local clientRoot = getRoot(Players.LocalPlayer.Character)
+
+                                if attackerRoot and clientRoot then
+                                    local distance = (attackerRoot.Position - clientRoot.Position).Magnitude
+                                    local dodgeDist, reactionTime
+
+                                    if distance <= detectDistance then
+                                        if distance <= 1 then
+                                            dodgeDist = 2.0
+                                            reactionTime = reactionTimes["1 stud"]
+                                        elseif distance <= 2 then
+                                            dodgeDist = 2.0
+                                            reactionTime = reactionTimes["2 stud"]
+                                        elseif distance <= 3 then
+                                            dodgeDist = 2.0
+                                            reactionTime = reactionTimes["3 stud"]
+                                        elseif distance <= 4 then
+                                            dodgeDist = 2.0
+                                            reactionTime = reactionTimes["4 stud"]
+                                        elseif distance <= 5 then
+                                            dodgeDist = 2.0
+                                            reactionTime = reactionTimes["5 stud"]
+                                        else
+                                            dodgeDist = 2.2
+                                            reactionTime = reactionTimes["Farther"]
+                                        end
+
+                                        if distance <= 10 and (d[1] == "AttackTrail" or d[1] == "StartupHighlight" or d[1] == "UltimateHighlight") then
+                                            handlePunch(attackerRoot, clientRoot, dodgeDist, reactionTime)
+                                            wait(dodgeCooldown)
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end)
+                end
+                return shared.BaseEffectFunction[i](d, ...)
+            end
+        end
+
+        UserInputService.InputBegan:Connect(function(input)
+            if input.KeyCode == Enum.KeyCode.F then
+                isFHeld = true
+            end
+        end)
+
+        UserInputService.InputEnded:Connect(function(input)
+            if input.KeyCode == Enum.KeyCode.F then
+                isFHeld = false
+            end
+        end)
+
+        UserInputService.InputBegan:Connect(function(input)
+            if input.KeyCode == Enum.KeyCode.W then
+                currentDirection = "Forward"
+            elseif input.KeyCode == Enum.KeyCode.S then
+                currentDirection = "Backward"
+            elseif input.KeyCode == Enum.KeyCode.A then
+                currentDirection = "Left"
+            elseif input.KeyCode == Enum.KeyCode.D then
+                currentDirection = "Right"
+            end
+        end)
+
+        UserInputService.InputEnded:Connect(function(input)
+            if input.KeyCode == Enum.KeyCode.W or input.KeyCode == Enum.KeyCode.S or input.KeyCode == Enum.KeyCode.A or input.KeyCode == Enum.KeyCode.D then
+                currentDirection = "Backward"
+            end
+        end)
+    end
+end
+
+-- Function to monitor the Punching state
+local function monitorPunching()
+    local punching = playerStates.Occupied.Punching
+    local function onPunchingChanged()
+        if punching.Value then
+            stopAutoDodge()
+            task.delay(0.3, function()
+                autoDodgeScript()
+            end)
+        else
+            autoDodgeScript()
+        end
+    end
+
+    punching:GetPropertyChangedSignal("Value"):Connect(onPunchingChanged)
+end
+
+-- Function to check and stop auto dodge when stunned
+local function checkStunned()
+    return playerStates.CharacterData.Stunned.Value
+end
+
+-- Update stunned state and manage auto dodge
+local function onStunnedChanged()
+    isStunned = checkStunned()
+    if isStunned then
+        print("Player stunned. Auto Dodge paused.")
+        stopAutoDodge()
+    else
+        print("Player no longer stunned. Auto Dodge will resume immediately.")
+        autoDodgeScript()
+    end
+end
+
+playerStates.CharacterData.Stunned:GetPropertyChangedSignal("Value"):Connect(onStunnedChanged)
+
+-- Function to rejoin the game if kicked
+local function rejoinGame()
+    local function onPlayerRemoving(player)
+        if player == Players.LocalPlayer then
+            task.wait(5)
+            print("Rejoining game...")
+            TeleportService:Teleport(game.PlaceId, Players.LocalPlayer)
+        end
+    end
+
+    Players.PlayerRemoving:Connect(onPlayerRemoving)
+end
+
+-- Initialize the rejoin functionality
+rejoinGame()
+
+-- Initialize auto dodge script if enabled
+if autoDodgeEnabled then
+    autoDodgeScript()
+end
+
+print("Script has been loaded and initialized.")
